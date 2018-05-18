@@ -1,0 +1,123 @@
+---
+title: "Machine learning prediction assignment"
+author: "MJM Beuken"
+date: "18 mei 2018"
+output: html_document
+---
+
+```{r, warning=FALSE}
+library(AppliedPredictiveModeling)
+library(ElemStatLearn)
+library(pgmm)
+library(caret)
+library(e1071)
+library(gbm)
+library(lubridate)
+library(elasticnet)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(tree)
+library(rattle)
+```
+
+
+
+#Getting and cleaning the data
+
+###Loading datasets
+```{r, warning=FALSE}
+trainurl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+train <- read.csv(url(trainurl))
+testurl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+test <- read.csv(url(testurl))
+
+set.seed(5463)
+```
+
+###Partition into validation and trainingset
+```{r, warning=FALSE}
+intrainset  <- createDataPartition(y=train$classe, p=0.8, list=FALSE)
+trainset <- train[intrainset, ]
+valset  <- train[-intrainset, ]
+```
+
+###Remove variables with mainly NA's.
+```{r, warning=FALSE}
+trainset <- trainset[, colSums(is.na(trainset))==0]
+valset <- valset[, colSums(is.na(valset))==0]
+```
+##remove irrelevant first seven columns
+```{r, warning=FALSE}
+trainset <- trainset[, -(1:7)]
+valset  <- valset[, -(1:7)]
+dim(trainset)
+dim(valset)
+```
+## remove variables with very low variances
+```{r, warning=FALSE}
+trainset <- trainset[, -(nearZeroVar(trainset))]
+valset  <- valset[, -(nearZeroVar(valset))]
+dim(trainset)
+dim(valset)
+```
+#Model building:
+Three methods will be applied to model the regressions (in the Train dataset) and the best one (the one with highest accuracy when applied to the Test dataset) will be used for the predictions in the testset. The methods are: A: Classification Tree, B: Random Forests and C: Generalized Boosted Model.
+Of each analysis the accuracy of the models is provided.
+
+###Method A: Classification Tree
+```{r, warning=FALSE}
+modfit <- train(classe~., method="rpart", data=trainset)
+fancyRpartPlot(modfit$finalModel, main="Classification Tree", type=1, palettes=c("Greys", "Oranges"))
+```
+
+Projecting on to validationset.
+```{r, warning=FALSE}
+predict <- predict(modfit, newdata=valset)
+confusionMatrix(predict, valset$classe)$overall[1]
+```
+In order to achieve higher accuracy, I create a large number of decision trees based on bagging. Through resampling the data over and over and training for each sample a new classifier. Through voting the differences in classifiers are averaged out. In other words: to achieve a higher accuracy the random forest method is deployed.
+### Method B: Random Forest
+We are going to check the performance of the tree on the testing data by cross validation.
+```{r, warning=FALSE}
+modfitRF <- train(classe ~ ., data=trainset, method="rf", trControl=trainControl(method="cv", number=3, verboseIter=FALSE))
+```
+
+projecting on to validation set
+```{r, warning=FALSE}
+predictRF <- predict(modfitRF, newdata=valset)
+confusionMatrix(predictRF, valset$classe)$overall[1]
+```
+Using a boosting method, building on weak classifiers, through adding a classifier at a time, so that every classifier is trained to improve the already trained ensemble.
+### Method C: GBM 
+```{r, warning=FALSE}
+modfitGBM  <- train(classe ~ ., data=trainset, method = "gbm", trControl = trainControl(method = "cv", number = 3), verbose = FALSE)
+
+
+predictGBM <- predict(modfitGBM, newdata=valset)
+confusionMatrix(predictGBM, valset$classe)$overall[1]
+```
+
+
+Random Forest has the highest accuracy, nearly higher than the Generalized Boosting Method. Both outperform the decision tree.
+Creating an ensemble model would be redundant because of the high accuracy of the random forest model, but we wil combine two predictors because of the fun of it.
+We make even a better model through combining GBM and RF.
+```{r, warning=FALSE}
+predDF <- data.frame(predictRF, predictGBM, classe=valset$classe)
+combRFGBM <- train(classe~., data=predDF)
+combpred <- predict(combRFGBM, predDF)
+confusionMatrix(combpred, valset$classe)$overall[1]
+```
+### Creating an overview of out of sample accuracy
+```{r, warning=FALSE}
+Results <- data.frame(Model=c('DTree', 'RF', 'GBM', 'Ensemble'), Accuracy = rbind(confusionMatrix(predict, valset$classe)$overall[1], confusionMatrix(predictRF, valset$classe)$overall[1], confusionMatrix(predictGBM, valset$classe)$overall[1], confusionMatrix(combpred, valset$classe)$overall[1]))
+print(Results)
+```
+# Predicting in testing set.
+Due to the little difference in accuracy between the ensemble and RF and due to the calculation power needed for the ensemble, I will stick with the RF-model.
+```{r, warning=FALSE}
+predictiontest <- predict(modfitRF, newdata=test)
+resultstest <- data.frame(problem_id=test$problem_id, predicted=predictiontest)
+print(resultstest)
+```
+
